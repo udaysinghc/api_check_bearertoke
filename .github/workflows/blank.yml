@@ -74,7 +74,7 @@ jobs:
         continue-on-error: true
         run: |
           # Find the collection file anywhere in the repo
-          COLLECTION=$(find . -type f -name "testing yml tets.postman_collection.json" -not -path "./node_modules/*" | head -n 1)
+          COLLECTION=$(find . -type f -name "*.postman_collection.json" -not -path "./node_modules/*" | head -n 1)
 
           if [ -z "$COLLECTION" ]; then
             echo "❌ Collection file not found in repository"
