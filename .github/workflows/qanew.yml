@@ -1,0 +1,338 @@
+name: Postman API Automation qa test process
+
+on:
+  workflow_dispatch:
+    inputs:
+      bearer_token:
+        description: "Enter token (with or without Bearer, example: eyJ...)"
+        required: true
+        type: string
+      base_url:
+        description: "Optional: override {{url}} (leave empty to use environment file)"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  postman-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ---------------------------------------------------------
+      # 1. Checkout repository
+      # ---------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # ---------------------------------------------------------
+      # 2. Setup Node.js
+      # ---------------------------------------------------------
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # ---------------------------------------------------------
+      # 3. Install Newman
+      # ---------------------------------------------------------
+      - name: Install Newman
+        run: npm install -g newman
+
+      # ---------------------------------------------------------
+      # 4. Check Bearer Token
+      # ---------------------------------------------------------
+      - name: Check Bearer Token
+        env:
+          BEARER_TOKEN: ${{ inputs.bearer_token }}
+        run: |
+          echo "Checking Bearer token..."
+
+          if [ -z "$BEARER_TOKEN" ]; then
+            echo "❌ Token is empty"
+            exit 1
+          fi
+
+          # Hide token in logs
+          echo "::add-mask::$BEARER_TOKEN"
+
+          # Accept token with or without "Bearer " prefix, remove spaces
+          TOKEN_VALUE="${BEARER_TOKEN#Bearer }"
+          TOKEN_VALUE="$(echo "$TOKEN_VALUE" | tr -d '[:space:]')"
+          echo "::add-mask::$TOKEN_VALUE"
+
+          if [ -z "$TOKEN_VALUE" ]; then
+            echo "❌ Token value is empty"
+            exit 1
+          fi
+
+          # Save raw token (without "Bearer ") for next step
+          echo "TOKEN_VALUE=$TOKEN_VALUE" >> "$GITHUB_ENV"
+
+          echo "✅ Token is ready and will be sent to Postman"
+
+      # ---------------------------------------------------------
+      # 5. Run Postman Collection
+      # ---------------------------------------------------------
+      - name: Run Postman Tests
+        id: postman
+        continue-on-error: true
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+        run: |
+          # Find the collection file anywhere in the repo
+          COLLECTION=$(find . -type f -name "testing yml tets.postman_collection.json" -not -path "./node_modules/*" | head -n 1)
+
+          if [ -z "$COLLECTION" ]; then
+            echo "❌ Collection file not found in repository"
+            echo "Files in repo:"
+            find . -type f -name "*.json" -not -path "./.git/*"
+            exit 1
+          fi
+
+          echo "✅ Using collection: $COLLECTION"
+
+          # Check and auto-fix Bearer auth inside the collection
+          # (if the exported file has an empty token, add {{bearer_token}})
+          COLLECTION="$COLLECTION" node <<'NODE'
+          const fs = require("fs");
+          const path = require("path");
+          const c = JSON.parse(fs.readFileSync(path.resolve(process.env.COLLECTION), "utf8"));
+          const TOKEN_VAR = "{{bearer_token}}";
+
+          const getToken = (auth) => {
+            const list = (auth && auth.bearer) || [];
+            const t = Array.isArray(list) ? list.find(x => x.key === "token") : null;
+            return t ? t.value : undefined;
+          };
+
+          const fixBearer = (auth) => {
+            if (!Array.isArray(auth.bearer)) auth.bearer = [];
+            const t = auth.bearer.find(x => x.key === "token");
+            if (t) t.value = TOKEN_VAR;
+            else auth.bearer.push({ key: "token", value: TOKEN_VAR, type: "string" });
+          };
+
+          console.log("---- Auth settings inside collection file ----");
+          console.log("Collection: " + (c.auth ? "type=" + c.auth.type + ", token=" + JSON.stringify(getToken(c.auth)) : "no auth"));
+
+          // Collection level: only fill the token if Bearer auth is used and empty
+          if (c.auth && c.auth.type === "bearer" && !getToken(c.auth)) {
+            fixBearer(c.auth);
+            console.log("Collection: empty token replaced with " + TOKEN_VAR);
+          }
+
+          const walk = (items) => (items || []).forEach(i => {
+            if (i.item) return walk(i.item);
+            const auth = i.request && i.request.auth;
+            const before = auth ? "type=" + auth.type + ", token=" + JSON.stringify(getToken(auth)) : "inherit from collection";
+            // Remove browser cache headers (stale ETag can cause 304 with empty body)
+            if (i.request && Array.isArray(i.request.header)) {
+              const drop = ["if-none-match", "if-modified-since", "cookie"];
+              const n = i.request.header.length;
+              i.request.header = i.request.header.filter(h => !drop.includes(String(h.key).toLowerCase()));
+              if (i.request.header.length !== n) console.log('Request "' + i.name + '": removed browser cache/cookie headers');
+            }
+            if (auth && auth.type === "bearer" && !getToken(auth)) {
+              fixBearer(auth);
+              console.log('Request "' + i.name + '": ' + before + "  -> FIXED: empty token replaced with " + TOKEN_VAR);
+            } else {
+              console.log('Request "' + i.name + '": ' + before);
+            }
+          });
+          walk(c.item);
+          console.log("----------------------------------------------");
+
+          fs.writeFileSync("fixed-collection.json", JSON.stringify(c, null, 2));
+          NODE
+
+          # Find environment file (optional) - needed to share values between requests
+          ENV_FILE=$(find . -type f -name "*.postman_environment.json" -not -path "./node_modules/*" | head -n 1)
+          ENV_ARGS=()
+          if [ -n "$ENV_FILE" ]; then
+            echo "✅ Using environment: $ENV_FILE"
+            ENV_ARGS=(--environment "$ENV_FILE" --export-environment final-environment.json)
+          else
+            echo "⚠️ No environment file found - using only workflow values"
+          fi
+
+          # url: use workflow input if given, else environment file, else default
+          URL_ARGS=()
+          if [ -n "$BASE_URL" ]; then
+            echo "✅ url from workflow input: $BASE_URL"
+            URL_ARGS=(--env-var "url=$BASE_URL")
+          elif [ -z "$ENV_FILE" ]; then
+            echo "✅ url default: https://reqres.in"
+            URL_ARGS=(--env-var "url=https://reqres.in")
+          else
+            echo "✅ url and other endpoints from environment file"
+          fi
+
+          newman run fixed-collection.json \
+            "${ENV_ARGS[@]}" \
+            "${URL_ARGS[@]}" \
+            --env-var "bearer_token=$TOKEN_VALUE" \
+            --env-var "Bearer_token=$TOKEN_VALUE" \
+            --env-var "BearerToken=$TOKEN_VALUE" \
+            --reporters cli,json \
+            --reporter-json-export postman-results.json
+
+      # ---------------------------------------------------------
+      # 5b. Show actual API response (for debugging)
+      # ---------------------------------------------------------
+      - name: Show API Response
+        if: always()
+        run: |
+          if [ ! -f postman-results.json ]; then
+            echo "No result file"
+            exit 0
+          fi
+
+          node <<'NODE' | tee -a "$GITHUB_STEP_SUMMARY"
+          const r = require("./postman-results.json");
+          console.log("## API Responses (from GitHub run)\n");
+          for (const ex of (r.run.executions || [])) {
+            const name = (ex.item && ex.item.name) || "Unknown request";
+            const res = ex.response || {};
+            let body = "";
+            if (res.stream && res.stream.data) {
+              body = Buffer.from(res.stream.data).toString("utf8");
+            }
+            if (body.length > 1500) body = body.slice(0, 1500) + "... (cut)";
+            const sentAuth = ((ex.request && ex.request.header) || [])
+              .some(h => String(h.key).toLowerCase() === "authorization");
+            console.log("**Request:** " + name);
+            console.log("");
+            console.log("- **Status:** " + (res.code || "no response") + " " + (res.status || ""));
+            console.log("- **Authorization header sent:** " + (sentAuth ? "yes" : "NO"));
+            console.log("");
+            console.log("```");
+            console.log(body || "(empty body)");
+            console.log("```");
+            console.log("");
+          }
+          NODE
+
+      # ---------------------------------------------------------
+      # 6. Generate GitHub Job Summary
+      # ---------------------------------------------------------
+      - name: Generate Postman Test Summary
+        if: always()
+        run: |
+          echo "# API Automation Result" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "**Collection:** testing yml tets" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ ! -f postman-results.json ]; then
+            echo "## Result" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "❌ **Postman result file was not generated**" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # -----------------------------------------------------
+          # Read statistics
+          # -----------------------------------------------------
+
+          REQUESTS=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.requests.total || 0);")
+          REQUESTS_FAILED=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.requests.failed || 0);")
+          PREREQUEST=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.prerequestScripts.total || 0);")
+          PREREQUEST_FAILED=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.prerequestScripts.failed || 0);")
+          TESTS=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.testScripts.total || 0);")
+          TESTS_FAILED=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.testScripts.failed || 0);")
+          ASSERTIONS=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.assertions.total || 0);")
+          ASSERTIONS_FAILED=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.assertions.failed || 0);")
+          ITERATIONS=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.iterations.total || 0);")
+          RESPONSE_TIME=$(node -e "const r=require('./postman-results.json'); const t=r.run.timings && r.run.timings.responseAverage; console.log(t ? Math.round(t) + ' ms' : 'N/A');")
+
+          # -----------------------------------------------------
+          # Metrics
+          # -----------------------------------------------------
+
+          echo "## Metrics" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Metric | Total | Failed |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---:|---:|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Requests | $REQUESTS | $REQUESTS_FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Pre-request Scripts | $PREREQUEST | $PREREQUEST_FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Test Scripts | $TESTS | $TESTS_FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Assertions | $ASSERTIONS | $ASSERTIONS_FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # -----------------------------------------------------
+          # Run information
+          # -----------------------------------------------------
+
+          echo "## Run Information" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Iterations:** $ITERATIONS" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Average Response Time:** $RESPONSE_TIME" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # -----------------------------------------------------
+          # Result
+          # -----------------------------------------------------
+
+          echo "## Result" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$ASSERTIONS_FAILED" -eq 0 ]; then
+            echo "✅ **API tests passed**" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ **API tests failed**" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "## Failed Tests" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Request | Assertion | Error |" >> "$GITHUB_STEP_SUMMARY"
+            echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+
+            node <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          const fs = require("fs");
+
+          const result = JSON.parse(fs.readFileSync("postman-results.json", "utf8"));
+          const executions = result.run.executions || [];
+
+          const escapeMarkdown = (value) =>
+            String(value).replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+
+          for (const execution of executions) {
+            const assertions = execution.assertions || [];
+
+            for (const assertion of assertions) {
+              if (!assertion.error) continue;
+
+              let request = "Unknown request";
+              if (execution.item && execution.item.request) {
+                const url = execution.item.request.url;
+                if (typeof url === "string") {
+                  request = url;
+                } else if (url && url.raw) {
+                  request = url.raw;
+                }
+              }
+
+              const assertionName = assertion.assertion || "Unknown assertion";
+              const errorMessage = assertion.error.message || "Assertion failed";
+
+              console.log(
+                `| ${escapeMarkdown(request)} | ${escapeMarkdown(assertionName)} | ${escapeMarkdown(errorMessage)} |`
+              );
+            }
+          }
+          NODE
+          fi
+
+      # ---------------------------------------------------------
+      # 7. Fail workflow if Postman failed
+      # ---------------------------------------------------------
+      - name: Check Postman Result
+        if: always()
+        run: |
+          if [ "${{ steps.postman.outcome }}" != "success" ]; then
+            echo "❌ Postman API tests failed"
+            exit 1
+          fi
+
+          echo "✅ Postman API tests passed"
