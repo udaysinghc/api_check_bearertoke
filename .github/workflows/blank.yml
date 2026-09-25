@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       bearer_token:
-        description: "Enter Bearer token (example: Bearer eyJ...)"
+        description: "Enter token (with or without Bearer, example: eyJ...)"
         required: true
         type: string
 
@@ -85,11 +85,96 @@ jobs:
 
           echo "✅ Using collection: $COLLECTION"
 
-          newman run "$COLLECTION" \
+          # Check and auto-fix Bearer auth inside the collection
+          # (if the exported file has an empty token, add {{bearer_token}})
+          COLLECTION="$COLLECTION" node <<'NODE'
+          const fs = require("fs");
+          const path = require("path");
+          const c = JSON.parse(fs.readFileSync(path.resolve(process.env.COLLECTION), "utf8"));
+          const TOKEN_VAR = "{{bearer_token}}";
+
+          const getToken = (auth) => {
+            const list = (auth && auth.bearer) || [];
+            const t = Array.isArray(list) ? list.find(x => x.key === "token") : null;
+            return t ? t.value : undefined;
+          };
+
+          const fixBearer = (auth) => {
+            if (!Array.isArray(auth.bearer)) auth.bearer = [];
+            const t = auth.bearer.find(x => x.key === "token");
+            if (t) t.value = TOKEN_VAR;
+            else auth.bearer.push({ key: "token", value: TOKEN_VAR, type: "string" });
+          };
+
+          console.log("---- Auth settings inside collection file ----");
+          console.log("Collection: " + (c.auth ? "type=" + c.auth.type + ", token=" + JSON.stringify(getToken(c.auth)) : "no auth"));
+
+          // Collection level: make sure Bearer auth with the token exists
+          if (!c.auth || c.auth.type === "noauth" || c.auth.type === "bearer") {
+            c.auth = c.auth && c.auth.type === "bearer" ? c.auth : { type: "bearer", bearer: [] };
+            if (!getToken(c.auth)) fixBearer(c.auth);
+          }
+
+          const walk = (items) => (items || []).forEach(i => {
+            if (i.item) return walk(i.item);
+            const auth = i.request && i.request.auth;
+            const before = auth ? "type=" + auth.type + ", token=" + JSON.stringify(getToken(auth)) : "inherit from collection";
+            if (auth && auth.type === "bearer" && !getToken(auth)) {
+              fixBearer(auth);
+              console.log('Request "' + i.name + '": ' + before + "  -> FIXED: empty token replaced with " + TOKEN_VAR);
+            } else {
+              console.log('Request "' + i.name + '": ' + before);
+            }
+          });
+          walk(c.item);
+          console.log("----------------------------------------------");
+
+          fs.writeFileSync("fixed-collection.json", JSON.stringify(c, null, 2));
+          NODE
+
+          newman run fixed-collection.json \
             --env-var "url=https://reqres.in" \
             --env-var "bearer_token=$TOKEN_VALUE" \
+            --env-var "Bearer_token=$TOKEN_VALUE" \
+            --env-var "BearerToken=$TOKEN_VALUE" \
             --reporters cli,json \
             --reporter-json-export postman-results.json
+
+      # ---------------------------------------------------------
+      # 5b. Show actual API response (for debugging)
+      # ---------------------------------------------------------
+      - name: Show API Response
+        if: always()
+        run: |
+          if [ ! -f postman-results.json ]; then
+            echo "No result file"
+            exit 0
+          fi
+
+          node <<'NODE' | tee -a "$GITHUB_STEP_SUMMARY"
+          const r = require("./postman-results.json");
+          console.log("## API Responses (from GitHub run)\n");
+          for (const ex of (r.run.executions || [])) {
+            const name = (ex.item && ex.item.name) || "Unknown request";
+            const res = ex.response || {};
+            let body = "";
+            if (res.stream && res.stream.data) {
+              body = Buffer.from(res.stream.data).toString("utf8");
+            }
+            if (body.length > 1500) body = body.slice(0, 1500) + "... (cut)";
+            const sentAuth = ((ex.request && ex.request.header) || [])
+              .some(h => String(h.key).toLowerCase() === "authorization");
+            console.log("**Request:** " + name);
+            console.log("");
+            console.log("- **Status:** " + (res.code || "no response") + " " + (res.status || ""));
+            console.log("- **Authorization header sent:** " + (sentAuth ? "yes" : "NO"));
+            console.log("");
+            console.log("```");
+            console.log(body || "(empty body)");
+            console.log("```");
+            console.log("");
+          }
+          NODE
 
       # ---------------------------------------------------------
       # 6. Generate GitHub Job Summary
