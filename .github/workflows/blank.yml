@@ -18,15 +18,15 @@ jobs:
       # 1. Checkout repository
       # ---------------------------------------------------------
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # ---------------------------------------------------------
       # 2. Setup Node.js
       # ---------------------------------------------------------
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
 
       # ---------------------------------------------------------
       # 3. Install Newman
@@ -119,6 +119,13 @@ jobs:
             if (i.item) return walk(i.item);
             const auth = i.request && i.request.auth;
             const before = auth ? "type=" + auth.type + ", token=" + JSON.stringify(getToken(auth)) : "inherit from collection";
+            // Remove browser cache headers (stale ETag can cause 304 with empty body)
+            if (i.request && Array.isArray(i.request.header)) {
+              const drop = ["if-none-match", "if-modified-since", "cookie"];
+              const n = i.request.header.length;
+              i.request.header = i.request.header.filter(h => !drop.includes(String(h.key).toLowerCase()));
+              if (i.request.header.length !== n) console.log('Request "' + i.name + '": removed browser cache/cookie headers');
+            }
             if (auth && auth.type === "bearer" && !getToken(auth)) {
               fixBearer(auth);
               console.log('Request "' + i.name + '": ' + before + "  -> FIXED: empty token replaced with " + TOKEN_VAR);
