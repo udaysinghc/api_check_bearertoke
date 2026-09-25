@@ -1,0 +1,117 @@
+{
+  "info": {
+    "_postman_id": "cb99f01f-0152-4b7e-938a-5e3982e4baab",
+    "name": "testing yml tets",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "10218772",
+    "_collection_link": "https://go.postman.co/collection/10218772-cb99f01f-0152-4b7e-938a-5e3982e4baab?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "https://reqres.in/api/onboarding/status",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{Bearer_token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "GET",
+        "header": [
+          {
+            "key": "accept",
+            "value": "*/*"
+          },
+          {
+            "key": "accept-language",
+            "value": "en-GB,en-US;q=0.9,en;q=0.8"
+          },
+          {
+            "key": "authorization",
+            "value": "Bearer {{Bearer_token}}",
+            "disabled": true
+          },
+          {
+            "key": "content-type",
+            "value": "application/json"
+          },
+          {
+            "key": "if-none-match",
+            "value": "W/\"c2-Ct1bjCVC7zu+RMGn6jzNpugAUjA\""
+          },
+          {
+            "key": "origin",
+            "value": "https://app.reqres.in"
+          },
+          {
+            "key": "priority",
+            "value": "u=1, i"
+          },
+          {
+            "key": "referer",
+            "value": "https://app.reqres.in/"
+          },
+          {
+            "key": "sec-ch-ua",
+            "value": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\""
+          },
+          {
+            "key": "sec-ch-ua-mobile",
+            "value": "?0"
+          },
+          {
+            "key": "sec-ch-ua-platform",
+            "value": "\"Windows\""
+          },
+          {
+            "key": "sec-fetch-dest",
+            "value": "empty"
+          },
+          {
+            "key": "sec-fetch-mode",
+            "value": "cors"
+          },
+          {
+            "key": "sec-fetch-site",
+            "value": "same-site"
+          },
+          {
+            "key": "user-agent",
+            "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+          },
+          {
+            "key": "x-reqres-client",
+            "value": "web_app"
+          }
+        ],
+        "url": {
+          "raw": "{{url}}/api/onboarding/status",
+          "host": [
+            "{{url}}"
+          ],
+          "path": [
+            "api",
+            "onboarding",
+            "status"
+          ]
+        },
+        "description": "Generated from cURL: curl --url 'https://reqres.in/api/onboarding/status' \\\r\n  -H 'accept: */*' \\\r\n  -H 'accept-language: en-GB,en-US;q=0.9,en;q=0.8' \\\r\n  -H 'authorization: Bearer {{json_web_token_05ks}}' \\\r\n  -H 'content-type: application/json' \\\r\n  -H 'if-none-match: W/\"c2-Ct1bjCVC7zu+RMGn6jzNpugAUjA\"' \\\r\n  -H 'origin: https://app.reqres.in' \\\r\n  -H 'priority: u=1, i' \\\r\n  -H 'referer: https://app.reqres.in/' \\\r\n  -H 'sec-ch-ua: \"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"' \\\r\n  -H 'sec-ch-ua-mobile: ?0' \\\r\n  -H 'sec-ch-ua-platform: \"Windows\"' \\\r\n  -H 'sec-fetch-dest: empty' \\\r\n  -H 'sec-fetch-mode: cors' \\\r\n  -H 'sec-fetch-site: same-site' \\\r\n  -H 'user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36' \\\r\n  -H 'x-reqres-client: web_app'"
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "json_web_token_05ks",
+      "secret": true
+    },
+    {
+      "key": "bearer_token_0g9u",
+      "secret": true
+    }
+  ]
+}
