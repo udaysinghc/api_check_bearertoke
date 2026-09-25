@@ -9,6 +9,17 @@
   "item": [
     {
       "name": "https://reqres.in/api/onboarding/status",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Response has session_expired error\", function () {\r\n    const response = pm.response.json();\r\n\r\n    pm.expect(response.error).to.eql(\"session_expired\");\r\n});\r\n\r\npm.test(\"Response has correct session expired message\", function () {\r\n    const response = pm.response.json();\r\n\r\n    pm.expect(response.message).to.eql(\r\n        \"Your session has expired. Please refresh the page to continue.\"\r\n    );\r\n})"
+            ]
+          }
+        }
+      ],
       "request": {
         "auth": {
           "type": "bearer",
