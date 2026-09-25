@@ -1,4 +1,4 @@
-name: Postman API Automation suit test
+name: Postman API Automation
 
 on:
   workflow_dispatch:
@@ -48,27 +48,23 @@ jobs:
             exit 1
           fi
 
-          if [[ "$BEARER_TOKEN" == Bearer\ * ]]; then
-            echo "✅ Bearer prefix found"
-          else
-            echo "❌ Token must start with 'Bearer '"
-            echo "Example: Bearer eyJhbGciOi..."
-            exit 1
-          fi
+          # Hide token in logs
+          echo "::add-mask::$BEARER_TOKEN"
 
+          # Accept token with or without "Bearer " prefix, remove spaces
           TOKEN_VALUE="${BEARER_TOKEN#Bearer }"
+          TOKEN_VALUE="$(echo "$TOKEN_VALUE" | tr -d '[:space:]')"
+          echo "::add-mask::$TOKEN_VALUE"
 
           if [ -z "$TOKEN_VALUE" ]; then
             echo "❌ Token value is empty"
             exit 1
           fi
 
-          # Hide token in logs
-          echo "::add-mask::$TOKEN_VALUE"
-          echo "::add-mask::$BEARER_TOKEN"
+          # Save raw token (without "Bearer ") for next step
+          echo "TOKEN_VALUE=$TOKEN_VALUE" >> "$GITHUB_ENV"
 
-          echo "✅ Bearer token format is correct"
-          echo "✅ Token will be sent to Postman"
+          echo "✅ Token is ready and will be sent to Postman"
 
       # ---------------------------------------------------------
       # 5. Run Postman Collection
@@ -76,11 +72,10 @@ jobs:
       - name: Run Postman Tests
         id: postman
         continue-on-error: true
-        env:
-          BEARER_TOKEN: ${{ inputs.bearer_token }}
         run: |
           newman run "testing yml tets.postman_collection.json" \
-            --env-var "bearer_token=$BEARER_TOKEN" \
+            --env-var "url=https://reqres.in" \
+            --env-var "bearer_token=$TOKEN_VALUE" \
             --reporters cli,json \
             --reporter-json-export postman-results.json
 
