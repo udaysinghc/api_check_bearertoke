@@ -73,7 +73,19 @@ jobs:
         id: postman
         continue-on-error: true
         run: |
-          newman run "testing yml tets.postman_collection.json" \
+          # Find the collection file anywhere in the repo
+          COLLECTION=$(find . -type f -name "testing yml tets.postman_collection.json" -not -path "./node_modules/*" | head -n 1)
+
+          if [ -z "$COLLECTION" ]; then
+            echo "❌ Collection file not found in repository"
+            echo "Files in repo:"
+            find . -type f -name "*.json" -not -path "./.git/*"
+            exit 1
+          fi
+
+          echo "✅ Using collection: $COLLECTION"
+
+          newman run "$COLLECTION" \
             --env-var "url=https://reqres.in" \
             --env-var "bearer_token=$TOKEN_VALUE" \
             --reporters cli,json \
