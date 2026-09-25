@@ -1,0 +1,299 @@
+name: tetss file name 
+on:
+  workflow_dispatch:
+    inputs:
+      BearerToken:
+        description: "BearerToken (with or without 'Bearer ', example: eyJ...)"
+        required: true
+        type: string
+      base_url:
+        description: "Optional: override {{url}} (empty = use environment file)"
+        required: false
+        type: string
+        default: ""
+      extra_vars:
+        description: "Optional: override other variables, example: order_url=https://x.com;userId=5"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  postman-tests:
+    runs-on: ubuntu-latest
+
+    env:
+      COLLECTION_NAME: "testing yml tets.postman_collection.json"
+      ENVIRONMENT_NAME: "dummy app.postman_environment.json"
+
+    steps:
+
+      # ---------------------------------------------------------
+      # 1. Checkout repository
+      # ---------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # ---------------------------------------------------------
+      # 2. Setup Node.js
+      # ---------------------------------------------------------
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # ---------------------------------------------------------
+      # 3. Install Newman
+      # ---------------------------------------------------------
+      - name: Install Newman
+        run: npm install -g newman
+
+      # ---------------------------------------------------------
+      # 4. Check token
+      # ---------------------------------------------------------
+      - name: Check Bearer Token
+        env:
+          BEARER_TOKEN: ${{ inputs.BearerToken }}
+        run: |
+          if [ -z "$BEARER_TOKEN" ]; then
+            echo "❌ Token is empty"
+            exit 1
+          fi
+          echo "::add-mask::$BEARER_TOKEN"
+
+          # Accept token with or without "Bearer ", remove spaces
+          TOKEN_VALUE="${BEARER_TOKEN#Bearer }"
+          TOKEN_VALUE="$(echo "$TOKEN_VALUE" | tr -d '[:space:]')"
+          echo "::add-mask::$TOKEN_VALUE"
+
+          if [ -z "$TOKEN_VALUE" ]; then
+            echo "❌ Token value is empty"
+            exit 1
+          fi
+
+          echo "TOKEN_VALUE=$TOKEN_VALUE" >> "$GITHUB_ENV"
+          echo "✅ Token is ready"
+
+      # ---------------------------------------------------------
+      # 5. Find files and prepare collection + environment
+      # ---------------------------------------------------------
+      - name: Prepare Collection and Environment
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          EXTRA_VARS: ${{ inputs.extra_vars }}
+        run: |
+          # Find collection (exact name first, else any collection)
+          COLLECTION=$(find . -type f -name "$COLLECTION_NAME" -not -path "./node_modules/*" | head -n 1)
+          [ -z "$COLLECTION" ] && COLLECTION=$(find . -type f -name "*.postman_collection.json" -not -path "./node_modules/*" | head -n 1)
+
+          if [ -z "$COLLECTION" ]; then
+            echo "❌ No Postman collection found. JSON files in repo:"
+            find . -type f -name "*.json" -not -path "./.git/*"
+            exit 1
+          fi
+
+          # Find environment (exact name first, else any environment)
+          ENV_FILE=$(find . -type f -name "$ENVIRONMENT_NAME" -not -path "./node_modules/*" | head -n 1)
+          [ -z "$ENV_FILE" ] && ENV_FILE=$(find . -type f -name "*.postman_environment.json" -not -path "./node_modules/*" | head -n 1)
+
+          echo "✅ Collection:  $COLLECTION"
+          echo "✅ Environment: ${ENV_FILE:-none (using only workflow values)}"
+
+          COLLECTION="$COLLECTION" ENV_FILE="$ENV_FILE" node <<'NODE'
+          const fs = require("fs");
+          const path = require("path");
+
+          const TOKEN = process.env.TOKEN_VALUE;
+          const TOKEN_VAR = "{{BearerToken}}";
+          const summary = [];
+
+          // ---------------- Environment ----------------
+          let env = { name: "workflow", values: [] };
+          if (process.env.ENV_FILE) {
+            env = JSON.parse(fs.readFileSync(path.resolve(process.env.ENV_FILE), "utf8"));
+            env.values = env.values || [];
+          }
+
+          const setVar = (key, value, secret) => {
+            const v = env.values.find(x => x.key === key);
+            if (v) { v.value = value; v.enabled = true; if (secret) v.secret = true; }
+            else env.values.push({ key, value, type: secret ? "secret" : "default", enabled: true, secret: !!secret });
+          };
+
+          // Token from GitHub Actions -> only BearerToken
+          setVar("BearerToken", TOKEN, true);
+
+          // url override from input
+          if (process.env.BASE_URL) setVar("url", process.env.BASE_URL);
+          if (!env.values.find(v => v.key === "url" && v.value)) setVar("url", "https://reqres.in");
+
+          // Extra variables: key=value;key2=value2
+          (process.env.EXTRA_VARS || "").split(";").map(s => s.trim()).filter(Boolean).forEach(pair => {
+            const i = pair.indexOf("=");
+            if (i > 0) setVar(pair.slice(0, i).trim(), pair.slice(i + 1).trim());
+          });
+
+          fs.writeFileSync("run-environment.json", JSON.stringify(env, null, 2));
+
+          // Show variables (hide secrets)
+          const isSecret = (v) => v.secret || /token|secret|password|key|auth/i.test(v.key);
+          summary.push("## Environment Variables Used\n", "| Variable | Value |", "|---|---|");
+          console.log("---- Environment variables ----");
+          env.values.filter(v => v.enabled !== false).forEach(v => {
+            const shown = isSecret(v) ? (v.value ? "***** (set)" : "(empty)") : (v.value || "(empty)");
+            console.log(v.key + " = " + shown);
+            summary.push("| " + v.key + " | " + String(shown).replace(/\|/g, "\\|") + " |");
+          });
+
+          // ---------------- Collection ----------------
+          const c = JSON.parse(fs.readFileSync(path.resolve(process.env.COLLECTION), "utf8"));
+
+          const getToken = (auth) => {
+            const list = (auth && auth.bearer) || [];
+            const t = Array.isArray(list) ? list.find(x => x.key === "token") : null;
+            return t ? t.value : undefined;
+          };
+          const fixBearer = (auth) => {
+            if (!Array.isArray(auth.bearer)) auth.bearer = [];
+            const t = auth.bearer.find(x => x.key === "token");
+            if (t) t.value = TOKEN_VAR;
+            else auth.bearer.push({ key: "token", value: TOKEN_VAR, type: "string" });
+          };
+
+          console.log("---- Auth settings in collection ----");
+          if (c.auth && c.auth.type === "bearer" && !getToken(c.auth)) {
+            fixBearer(c.auth);
+            console.log("Collection: empty token replaced with " + TOKEN_VAR);
+          }
+
+          const walk = (items) => (items || []).forEach(i => {
+            if (i.item) return walk(i.item);
+            const req = i.request || {};
+            // Remove stale browser cache/cookie headers
+            if (Array.isArray(req.header)) {
+              const drop = ["if-none-match", "if-modified-since", "cookie"];
+              req.header = req.header.filter(h => !drop.includes(String(h.key).toLowerCase()));
+            }
+            const auth = req.auth;
+            let info = auth ? "type=" + auth.type + ", token=" + JSON.stringify(getToken(auth)) : "inherit";
+            if (auth && auth.type === "bearer" && !getToken(auth)) {
+              fixBearer(auth);
+              info += " -> FIXED to " + TOKEN_VAR;
+            } else if (auth && auth.type === "bearer" && getToken(auth) !== TOKEN_VAR) {
+              info += "  ⚠️ WARNING: token field should be " + TOKEN_VAR + " (token from GitHub will NOT be used)";
+              console.log("::warning::Request '" + i.name + "' uses " + getToken(auth) + " - change it to " + TOKEN_VAR + " in Postman");
+            }
+            console.log('Request "' + i.name + '": ' + info);
+          });
+          walk(c.item);
+
+          fs.writeFileSync("run-collection.json", JSON.stringify(c, null, 2));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY || "/dev/null", summary.join("\n") + "\n\n");
+          NODE
+
+      # ---------------------------------------------------------
+      # 6. Run Postman Collection
+      # ---------------------------------------------------------
+      - name: Run Postman Tests
+        id: postman
+        continue-on-error: true
+        run: |
+          newman run run-collection.json \
+            --environment run-environment.json \
+            --export-environment final-environment.json \
+            --reporters cli,json \
+            --reporter-json-export postman-results.json
+
+      # ---------------------------------------------------------
+      # 7. Show API responses
+      # ---------------------------------------------------------
+      - name: Show API Responses
+        if: always()
+        run: |
+          if [ ! -f postman-results.json ]; then
+            echo "No result file"
+            exit 0
+          fi
+
+          node <<'NODE' | tee -a "$GITHUB_STEP_SUMMARY"
+          const r = require("./postman-results.json");
+          console.log("## API Responses\n");
+          for (const ex of (r.run.executions || [])) {
+            const name = (ex.item && ex.item.name) || "Unknown request";
+            const res = ex.response || {};
+            let body = res.stream && res.stream.data ? Buffer.from(res.stream.data).toString("utf8") : "";
+            if (body.length > 1500) body = body.slice(0, 1500) + "... (cut)";
+            const url = ex.request && ex.request.url
+              ? [ex.request.url.protocol ? ex.request.url.protocol + "://" : "",
+                 (ex.request.url.host || []).join("."),
+                 ex.request.url.port ? ":" + ex.request.url.port : "",
+                 "/" + (ex.request.url.path || []).join("/")].join("")
+              : "";
+            const sentAuth = ((ex.request && ex.request.header) || [])
+              .some(h => String(h.key).toLowerCase() === "authorization");
+            console.log("**" + name + "**\n");
+            console.log("- **URL:** " + url);
+            console.log("- **Status:** " + (res.code || "no response") + " " + (res.status || ""));
+            console.log("- **Authorization sent:** " + (sentAuth ? "yes" : "no"));
+            console.log("\n```\n" + (body || "(empty body)") + "\n```\n");
+          }
+          NODE
+
+      # ---------------------------------------------------------
+      # 8. Test summary
+      # ---------------------------------------------------------
+      - name: Generate Test Summary
+        if: always()
+        run: |
+          if [ ! -f postman-results.json ]; then
+            echo "## Result" >> "$GITHUB_STEP_SUMMARY"
+            echo "❌ **Postman result file was not generated**" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          node <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          const r = require("./postman-results.json");
+          const s = r.run.stats;
+          const esc = (v) => String(v).replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+          const t = r.run.timings && r.run.timings.responseAverage;
+
+          console.log("# API Automation Result\n");
+          console.log("## Metrics\n");
+          console.log("| Metric | Total | Failed |");
+          console.log("|---|---:|---:|");
+          console.log(`| Requests | ${s.requests.total} | ${s.requests.failed} |`);
+          console.log(`| Pre-request Scripts | ${s.prerequestScripts.total} | ${s.prerequestScripts.failed} |`);
+          console.log(`| Test Scripts | ${s.testScripts.total} | ${s.testScripts.failed} |`);
+          console.log(`| Assertions | ${s.assertions.total} | ${s.assertions.failed} |`);
+          console.log("");
+          console.log(`- **Iterations:** ${s.iterations.total}`);
+          console.log(`- **Average Response Time:** ${t ? Math.round(t) + " ms" : "N/A"}`);
+          console.log("");
+
+          const failed = s.assertions.failed + s.requests.failed + s.testScripts.failed;
+          console.log("## Result\n");
+          if (failed === 0) {
+            console.log("✅ **API tests passed**");
+          } else {
+            console.log("❌ **API tests failed**\n");
+            console.log("| Request | Test | Error |");
+            console.log("|---|---|---|");
+            for (const f of (r.run.failures || [])) {
+              const name = (f.source && f.source.name) || "Unknown";
+              const test = (f.error && (f.error.test || f.error.name)) || "Error";
+              const msg = (f.error && f.error.message) || "Failed";
+              console.log(`| ${esc(name)} | ${esc(test)} | ${esc(msg)} |`);
+            }
+          }
+          NODE
+
+      # ---------------------------------------------------------
+      # 9. Fail workflow if tests failed
+      # ---------------------------------------------------------
+      - name: Check Postman Result
+        if: always()
+        run: |
+          if [ "${{ steps.postman.outcome }}" != "success" ]; then
+            echo "❌ Postman API tests failed"
+            exit 1
+          fi
+          echo "✅ Postman API tests passed"
