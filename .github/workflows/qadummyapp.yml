@@ -13,8 +13,8 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      COLLECTION_NAME: "testing yml tets.postman_collection.json"
-      ENVIRONMENT_NAME: "dummy app.postman_environment.json"
+      COLLECTION_NAME: "*.postman_collection.json"
+      ENVIRONMENT_NAME: "*.postman_environment.json"
 
     steps:
 
