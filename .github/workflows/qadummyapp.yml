@@ -1,4 +1,4 @@
-name: final test fixed api
+name: final test this version
 
 on:
   workflow_dispatch:
@@ -185,9 +185,9 @@ jobs:
           };
 
           console.log("---- Auth settings in collection ----");
-          if (c.auth && c.auth.type === "bearer" && !getToken(c.auth)) {
+          if (c.auth && c.auth.type === "bearer" && getToken(c.auth) !== TOKEN_VAR) {
+            console.log("Collection: token " + JSON.stringify(getToken(c.auth)) + " -> changed to " + TOKEN_VAR);
             fixBearer(c.auth);
-            console.log("Collection: empty token replaced with " + TOKEN_VAR);
           }
 
           const walk = (items) => (items || []).forEach(i => {
@@ -200,12 +200,19 @@ jobs:
             }
             const auth = req.auth;
             let info = auth ? "type=" + auth.type + ", token=" + JSON.stringify(getToken(auth)) : "inherit";
-            if (auth && auth.type === "bearer" && !getToken(auth)) {
+            // Always use BearerToken from GitHub for Bearer auth, whatever name the collection uses
+            if (auth && auth.type === "bearer" && getToken(auth) !== TOKEN_VAR) {
               fixBearer(auth);
-              info += " -> FIXED to " + TOKEN_VAR;
-            } else if (auth && auth.type === "bearer" && getToken(auth) !== TOKEN_VAR) {
-              info += "  ⚠️ WARNING: token field should be " + TOKEN_VAR + " (token from GitHub will NOT be used)";
-              console.log("::warning::Request '" + i.name + "' uses " + getToken(auth) + " - change it to " + TOKEN_VAR + " in Postman");
+              info += " -> changed to " + TOKEN_VAR;
+            }
+            // Same for a manual "Authorization: Bearer {{...}}" header
+            if (Array.isArray(req.header)) {
+              req.header.forEach(h => {
+                if (String(h.key).toLowerCase() === "authorization" && !h.disabled && /^Bearer\s+\{\{.+\}\}$/.test(String(h.value).trim())) {
+                  h.value = "Bearer " + TOKEN_VAR;
+                  info += " | Authorization header -> Bearer " + TOKEN_VAR;
+                }
+              });
             }
             console.log('Request "' + i.name + '": ' + info);
           });
