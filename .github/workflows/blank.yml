@@ -1,10 +1,10 @@
-name: Run API Automation sut test
+name: Postman API Automation suit test
 
 on:
   workflow_dispatch:
     inputs:
-      bearerToken:
-        description: "Bearer Token (enter token only, without 'Bearer ')"
+      bearer_token:
+        description: "Enter Bearer token (example: Bearer eyJ...)"
         required: true
         type: string
 
@@ -14,406 +14,196 @@ jobs:
 
     steps:
 
-      # ==================================================
-      # Checkout repository
-      # ==================================================
-      - name: Checkout Repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # ---------------------------------------------------------
+      # 1. Checkout repository
+      # ---------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # ==================================================
-      # Setup Node.js
-      # ==================================================
+      # ---------------------------------------------------------
+      # 2. Setup Node.js
+      # ---------------------------------------------------------
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      # ==================================================
-      # Install Newman
-      # ==================================================
+      # ---------------------------------------------------------
+      # 3. Install Newman
+      # ---------------------------------------------------------
       - name: Install Newman
-        shell: bash
-        run: |
-          set -e
+        run: npm install -g newman
 
-          npm install -g newman
-          npm install -g newman-reporter-htmlextra
-
-          sudo apt-get update
-          sudo apt-get install -y jq
-
-          echo "Newman version:"
-          newman --version
-
-          echo "jq version:"
-          jq --version
-
-      # ==================================================
-      # Create reports directory
-      # ==================================================
-      - name: Create Reports Folder
-        shell: bash
-        run: |
-          mkdir -p reports
-
-      # ==================================================
-      # Find Postman collection and environment
-      # ==================================================
-      - name: Find Postman Collection and Environment
-        shell: bash
-        run: |
-
-          set -e
-
-          API_AUTOMATION="$GITHUB_WORKSPACE/API Automation"
-
-          echo "=========================================="
-          echo "Searching Postman files"
-          echo "=========================================="
-
-          echo "Folder:"
-          echo "$API_AUTOMATION"
-
-          # ----------------------------------------------
-          # Check API Automation folder
-          # ----------------------------------------------
-
-          if [ ! -d "$API_AUTOMATION" ]; then
-            echo "❌ API Automation folder not found"
-            exit 1
-          fi
-
-          # ----------------------------------------------
-          # Find collection
-          # ----------------------------------------------
-
-          COLLECTION=$(find "$API_AUTOMATION" \
-            -type f \
-            -name "*.postman_collection.json" \
-            | head -n 1)
-
-          if [ -z "$COLLECTION" ]; then
-            echo "❌ Postman collection not found"
-            exit 1
-          fi
-
-          echo "✅ Collection found:"
-          echo "$COLLECTION"
-
-          # ----------------------------------------------
-          # Find environment
-          # ----------------------------------------------
-
-          ENVIRONMENT=$(find "$API_AUTOMATION" \
-            -type f \
-            -name "*.postman_environment.json" \
-            | head -n 1)
-
-          if [ -n "$ENVIRONMENT" ]; then
-
-            echo "✅ Environment found:"
-            echo "$ENVIRONMENT"
-
-          else
-
-            echo "⚠️ No Postman environment found"
-
-          fi
-
-          # ----------------------------------------------
-          # Save variables
-          # ----------------------------------------------
-
-          echo "COLLECTION=$COLLECTION" >> "$GITHUB_ENV"
-          echo "ENVIRONMENT=$ENVIRONMENT" >> "$GITHUB_ENV"
-
-      # ==================================================
-      # Run Newman
-      # ==================================================
-      - name: Run Newman Collection
-        id: newman
-        continue-on-error: true
-        shell: bash
-
+      # ---------------------------------------------------------
+      # 4. Check Bearer Token
+      # ---------------------------------------------------------
+      - name: Check Bearer Token
         env:
-          # GitHub workflow_dispatch input
-          ACCESS_TOKEN: ${{ inputs.bearerToken }}
-
+          BEARER_TOKEN: ${{ inputs.bearer_token }}
         run: |
+          echo "Checking Bearer token..."
 
-          echo "=========================================="
-          echo "Running Newman"
-          echo "=========================================="
-
-          # ----------------------------------------------
-          # Check token
-          # ----------------------------------------------
-
-          if [ -z "$ACCESS_TOKEN" ]; then
-
-            echo "❌ Bearer token is empty."
-
-            echo "NEWMAN_EXIT_CODE=1" >> "$GITHUB_ENV"
-
-            exit 0
-
+          if [ -z "$BEARER_TOKEN" ]; then
+            echo "❌ Token is empty"
+            exit 1
           fi
 
-          # ----------------------------------------------
-          # Mask token
-          # ----------------------------------------------
-
-          echo "::add-mask::$ACCESS_TOKEN"
-
-          echo "✅ Bearer token received."
-          echo "Token value will not be printed."
-
-          # ----------------------------------------------
-          # Remove accidental "Bearer " prefix
-          # ----------------------------------------------
-
-          ACCESS_TOKEN="${ACCESS_TOKEN#Bearer }"
-
-          # Mask again after transformation
-          echo "::add-mask::$ACCESS_TOKEN"
-
-          # ----------------------------------------------
-          # Check collection
-          # ----------------------------------------------
-
-          if [ ! -f "$COLLECTION" ]; then
-
-            echo "❌ Collection file not found:"
-            echo "$COLLECTION"
-
-            echo "NEWMAN_EXIT_CODE=1" >> "$GITHUB_ENV"
-
-            exit 0
-
-          fi
-
-          # ----------------------------------------------
-          # Run Newman
-          # ----------------------------------------------
-
-          if [ -n "$ENVIRONMENT" ] && [ -f "$ENVIRONMENT" ]; then
-
-            echo "Using Postman environment:"
-            echo "$ENVIRONMENT"
-
-            newman run "$COLLECTION" \
-              --environment "$ENVIRONMENT" \
-              --env-var "BearerToken=$ACCESS_TOKEN" \
-              --reporters cli,json,htmlextra \
-              --reporter-json-export reports/report.json \
-              --reporter-htmlextra-export reports/report.html
-
-            NEWMAN_EXIT_CODE=$?
-
+          if [[ "$BEARER_TOKEN" == Bearer\ * ]]; then
+            echo "✅ Bearer prefix found"
           else
-
-            echo "⚠️ No Postman environment found."
-
-            newman run "$COLLECTION" \
-              --env-var "BearerToken=$ACCESS_TOKEN" \
-              --reporters cli,json,htmlextra \
-              --reporter-json-export reports/report.json \
-              --reporter-htmlextra-export reports/report.html
-
-            NEWMAN_EXIT_CODE=$?
-
+            echo "❌ Token must start with 'Bearer '"
+            echo "Example: Bearer eyJhbGciOi..."
+            exit 1
           fi
 
-          # ----------------------------------------------
-          # Save Newman result
-          # ----------------------------------------------
+          TOKEN_VALUE="${BEARER_TOKEN#Bearer }"
 
-          echo ""
-          echo "Newman exit code: $NEWMAN_EXIT_CODE"
+          if [ -z "$TOKEN_VALUE" ]; then
+            echo "❌ Token value is empty"
+            exit 1
+          fi
 
-          echo "NEWMAN_EXIT_CODE=$NEWMAN_EXIT_CODE" >> "$GITHUB_ENV"
+          # Hide token in logs
+          echo "::add-mask::$TOKEN_VALUE"
+          echo "::add-mask::$BEARER_TOKEN"
 
-          # Do not fail this step.
-          # Final step handles workflow failure.
-          exit 0
+          echo "✅ Bearer token format is correct"
+          echo "✅ Token will be sent to Postman"
 
-      # ==================================================
-      # Generate GitHub Actions summary
-      # ==================================================
-      - name: Generate Newman Dashboard Summary
-        if: always()
-        shell: bash
+      # ---------------------------------------------------------
+      # 5. Run Postman Collection
+      # ---------------------------------------------------------
+      - name: Run Postman Tests
+        id: postman
+        continue-on-error: true
+        env:
+          BEARER_TOKEN: ${{ inputs.bearer_token }}
         run: |
+          newman run "testing yml tets.postman_collection.json" \
+            --env-var "bearer_token=$BEARER_TOKEN" \
+            --reporters cli,json \
+            --reporter-json-export postman-results.json
 
+      # ---------------------------------------------------------
+      # 6. Generate GitHub Job Summary
+      # ---------------------------------------------------------
+      - name: Generate Postman Test Summary
+        if: always()
+        run: |
           echo "# API Automation Result" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          # ----------------------------------------------
-          # Check report
-          # ----------------------------------------------
+          echo "**Collection:** testing yml tets" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          if [ ! -f "reports/report.json" ]; then
-
-            echo "❌ Newman report was not generated." \
-              >> "$GITHUB_STEP_SUMMARY"
-
+          if [ ! -f postman-results.json ]; then
+            echo "## Result" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-
-            echo "Newman may have failed before creating the report." \
-              >> "$GITHUB_STEP_SUMMARY"
-
+            echo "❌ **Postman result file was not generated**" >> "$GITHUB_STEP_SUMMARY"
             exit 0
-
           fi
 
-          # ----------------------------------------------
-          # Read Newman statistics
-          # ----------------------------------------------
+          # -----------------------------------------------------
+          # Read statistics
+          # -----------------------------------------------------
 
-          REQUESTS=$(jq -r \
-            '.run.stats.requests.total // 0' \
-            reports/report.json)
+          REQUESTS=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.requests.total || 0);")
+          REQUESTS_FAILED=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.requests.failed || 0);")
+          PREREQUEST=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.prerequestScripts.total || 0);")
+          PREREQUEST_FAILED=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.prerequestScripts.failed || 0);")
+          TESTS=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.testScripts.total || 0);")
+          TESTS_FAILED=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.testScripts.failed || 0);")
+          ASSERTIONS=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.assertions.total || 0);")
+          ASSERTIONS_FAILED=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.assertions.failed || 0);")
+          ITERATIONS=$(node -e "const r=require('./postman-results.json'); console.log(r.run.stats.iterations.total || 0);")
+          RESPONSE_TIME=$(node -e "const r=require('./postman-results.json'); const t=r.run.timings && r.run.timings.responseAverage; console.log(t ? Math.round(t) + ' ms' : 'N/A');")
 
-          FAILED_REQUESTS=$(jq -r \
-            '.run.stats.requests.failed // 0' \
-            reports/report.json)
+          # -----------------------------------------------------
+          # Metrics
+          # -----------------------------------------------------
 
-          ASSERTIONS=$(jq -r \
-            '.run.stats.assertions.total // 0' \
-            reports/report.json)
+          echo "## Metrics" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Metric | Total | Failed |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---:|---:|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Requests | $REQUESTS | $REQUESTS_FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Pre-request Scripts | $PREREQUEST | $PREREQUEST_FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Test Scripts | $TESTS | $TESTS_FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Assertions | $ASSERTIONS | $ASSERTIONS_FAILED |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          FAILED_ASSERTIONS=$(jq -r \
-            '.run.stats.assertions.failed // 0' \
-            reports/report.json)
+          # -----------------------------------------------------
+          # Run information
+          # -----------------------------------------------------
 
-          TESTS=$(jq -r \
-            '.run.stats.tests.total // 0' \
-            reports/report.json)
+          echo "## Run Information" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Iterations:** $ITERATIONS" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Average Response Time:** $RESPONSE_TIME" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          FAILED_TESTS=$(jq -r \
-            '.run.stats.tests.failed // 0' \
-            reports/report.json)
+          # -----------------------------------------------------
+          # Result
+          # -----------------------------------------------------
 
-          PREREQUEST=$(jq -r \
-            '.run.stats.prerequests.total // 0' \
-            reports/report.json)
+          echo "## Result" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          FAILED_PREREQUEST=$(jq -r \
-            '.run.stats.prerequests.failed // 0' \
-            reports/report.json)
+          if [ "$ASSERTIONS_FAILED" -eq 0 ]; then
+            echo "✅ **API tests passed**" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ **API tests failed**" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "## Failed Tests" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Request | Assertion | Error |" >> "$GITHUB_STEP_SUMMARY"
+            echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
 
-          ITERATIONS=$(jq -r \
-            '.run.stats.iterations.total // 0' \
-            reports/report.json)
+            node <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          const fs = require("fs");
 
-          AVG_TIME=$(jq -r \
-            '.run.timings.responseAverage // 0' \
-            reports/report.json)
+          const result = JSON.parse(fs.readFileSync("postman-results.json", "utf8"));
+          const executions = result.run.executions || [];
 
-          COLLECTION_NAME=$(jq -r \
-            '.collection.info.name // "Unknown Collection"' \
-            reports/report.json)
+          const escapeMarkdown = (value) =>
+            String(value).replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 
-          # ----------------------------------------------
-          # Create summary
-          # ----------------------------------------------
+          for (const execution of executions) {
+            const assertions = execution.assertions || [];
 
-          {
-            echo "**Collection:** $COLLECTION_NAME"
-            echo ""
+            for (const assertion of assertions) {
+              if (!assertion.error) continue;
 
-            echo "| Metric | Total | Failed |"
-            echo "|--------|------:|-------:|"
-            echo "| Requests | $REQUESTS | $FAILED_REQUESTS |"
-            echo "| Pre-request Scripts | $PREREQUEST | $FAILED_PREREQUEST |"
-            echo "| Test Scripts | $TESTS | $FAILED_TESTS |"
-            echo "| Assertions | $ASSERTIONS | $FAILED_ASSERTIONS |"
+              let request = "Unknown request";
+              if (execution.item && execution.item.request) {
+                const url = execution.item.request.url;
+                if (typeof url === "string") {
+                  request = url;
+                } else if (url && url.raw) {
+                  request = url.raw;
+                }
+              }
 
-            echo ""
+              const assertionName = assertion.assertion || "Unknown assertion";
+              const errorMessage = assertion.error.message || "Assertion failed";
 
-            echo "## Run Information"
-            echo ""
+              console.log(
+                `| ${escapeMarkdown(request)} | ${escapeMarkdown(assertionName)} | ${escapeMarkdown(errorMessage)} |`
+              );
+            }
+          }
+          NODE
+          fi
 
-            echo "- **Iterations:** $ITERATIONS"
-            echo "- **Average Response Time:** ${AVG_TIME} ms"
-
-            echo ""
-
-            echo "## Result"
-            echo ""
-
-            if [ "$FAILED_ASSERTIONS" -eq 0 ] && \
-               [ "$FAILED_REQUESTS" -eq 0 ]; then
-
-              echo "✅ All API tests passed"
-
-            else
-
-              echo "❌ API tests failed"
-
-            fi
-
-            echo ""
-
-            echo "## Failed Tests"
-            echo ""
-
-            if [ "$FAILED_ASSERTIONS" -eq 0 ]; then
-
-              echo "No failed assertions."
-
-            else
-
-              echo "| Request | Assertion | Error |"
-              echo "|---------|-----------|-------|"
-
-              jq -r '
-                .run.executions[]
-                | select(.assertions != null)
-                | .item.name as $request
-                | .assertions[]
-                | select(.error != null)
-                | "| \($request) | \(.assertion // "Unknown") | \(.error.message // "Unknown error" | gsub("\\|"; "\\|") | gsub("\n"; " ")) |"
-              ' reports/report.json
-
-            fi
-
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      # ==================================================
-      # Upload reports
-      # ==================================================
-      - name: Upload Newman Reports
+      # ---------------------------------------------------------
+      # 7. Fail workflow if Postman failed
+      # ---------------------------------------------------------
+      - name: Check Postman Result
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: postman-report
-          path: reports/
-          if-no-files-found: warn
-
-      # ==================================================
-      # Check Newman result
-      # ==================================================
-      - name: Check Newman Result
-        if: always()
-        shell: bash
         run: |
-
-          echo "=========================================="
-          echo "Newman Final Result"
-          echo "=========================================="
-
-          echo "Newman Exit Code:"
-          echo "${NEWMAN_EXIT_CODE:-unknown}"
-
-          if [ "${NEWMAN_EXIT_CODE:-1}" != "0" ]; then
-
-            echo ""
-            echo "❌ Newman API tests failed."
-
+          if [ "${{ steps.postman.outcome }}" != "success" ]; then
+            echo "❌ Postman API tests failed"
             exit 1
-
           fi
 
-          echo ""
-          echo "✅ Newman API tests passed."
+          echo "✅ Postman API tests passed"
