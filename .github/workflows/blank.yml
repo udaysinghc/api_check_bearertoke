@@ -159,7 +159,7 @@ jobs:
           # Incorrect:
           # Bearer eyJhbGciOiJIUzI1NiIs...
           #
-          ACCESS_TOKEN: ${{ github.event.inputs.bearerToken }}
+          ACCESS_TOKEN: ${{ github.event.inputs.BearerToken }}
 
         run: |
 
@@ -229,7 +229,7 @@ jobs:
 
             newman run "$COLLECTION" \
               --environment "$ENVIRONMENT" \
-              --env-var "accessToken=$ACCESS_TOKEN" \
+              --env-var "BearerToken=$ACCESS_TOKEN" \
               --reporters cli,json,htmlextra \
               --reporter-json-export reports/report.json \
               --reporter-htmlextra-export reports/report.html
