@@ -1,4 +1,5 @@
-name: tetss file name 
+name: Postman API Automation
+
 on:
   workflow_dispatch:
     inputs:
@@ -6,24 +7,14 @@ on:
         description: "BearerToken (with or without 'Bearer ', example: eyJ...)"
         required: true
         type: string
-      base_url:
-        description: "Optional: override {{url}} (empty = use environment file)"
-        required: false
-        type: string
-        default: ""
-      extra_vars:
-        description: "Optional: override other variables, example: order_url=https://x.com;userId=5"
-        required: false
-        type: string
-        default: ""
 
 jobs:
   postman-tests:
     runs-on: ubuntu-latest
 
     env:
-      COLLECTION_NAME: "testing yml tets.postman_collection.json"
-      ENVIRONMENT_NAME: "dummy app.postman_environment.json"
+      COLLECTION_NAME: "*.postman_collection.json"
+      ENVIRONMENT_NAME: "*.postman_environment.json"
 
     steps:
 
@@ -70,6 +61,48 @@ jobs:
             exit 1
           fi
 
+          # Remove a second "Bearer" if pasted twice
+          TOKEN_VALUE="${TOKEN_VALUE#Bearer}"
+          # Remove quotes if pasted with them
+          TOKEN_VALUE="$(printf '%s' "$TOKEN_VALUE" | tr -d "\"'")"
+
+          # Validate JWT format and show expiry (token itself is never printed)
+          if TOKEN_VALUE="$TOKEN_VALUE" node <<'NODE'
+          const t = process.env.TOKEN_VALUE;
+          const parts = t.split(".");
+          console.log("Token length: " + t.length + " characters");
+          console.log("Token parts (must be 3): " + parts.length);
+
+          if (parts.length !== 3) {
+            console.log("::error::Token is not a valid JWT. It has " + parts.length + " parts, must be 3 (xxx.yyy.zzz).");
+            if (parts.length > 3) console.log("Looks like the token was pasted twice or joined with another token.");
+            if (parts.length < 3) console.log("Looks like the token was cut off (incomplete copy).");
+            process.exit(1);
+          }
+
+          const decode = (s) => JSON.parse(Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+          let header, payload;
+          try { header = decode(parts[0]); payload = decode(parts[1]); }
+          catch (e) {
+            console.log("::error::Token parts cannot be decoded - the token is damaged or incomplete. Copy it again.");
+            process.exit(1);
+          }
+
+          console.log("Algorithm: " + header.alg);
+          const now = Math.floor(Date.now() / 1000);
+          if (payload.exp) {
+            const diff = payload.exp - now;
+            console.log("Issued at:  " + (payload.iat ? new Date(payload.iat * 1000).toISOString() : "unknown"));
+            console.log("Expires at: " + new Date(payload.exp * 1000).toISOString());
+            if (diff < 0) console.log("⚠️ Token EXPIRED " + Math.round(-diff / 60) + " minute(s) ago (API should reply session_expired)");
+            else console.log("✅ Token still valid for " + diff + " second(s)");
+          } else {
+            console.log("No expiry (exp) in token");
+          }
+          console.log("✅ Token format is a valid JWT");
+          NODE
+          then :; else echo "❌ Fix the token and run again"; exit 1; fi
+
           echo "TOKEN_VALUE=$TOKEN_VALUE" >> "$GITHUB_ENV"
           echo "✅ Token is ready"
 
@@ -77,9 +110,6 @@ jobs:
       # 5. Find files and prepare collection + environment
       # ---------------------------------------------------------
       - name: Prepare Collection and Environment
-        env:
-          BASE_URL: ${{ inputs.base_url }}
-          EXTRA_VARS: ${{ inputs.extra_vars }}
         run: |
           # Find collection (exact name first, else any collection)
           COLLECTION=$(find . -type f -name "$COLLECTION_NAME" -not -path "./node_modules/*" | head -n 1)
@@ -119,18 +149,13 @@ jobs:
             else env.values.push({ key, value, type: secret ? "secret" : "default", enabled: true, secret: !!secret });
           };
 
-          // Token from GitHub Actions -> only BearerToken
+          // BearerToken ALWAYS from GitHub Actions input (env file value is ignored)
           setVar("BearerToken", TOKEN, true);
 
-          // url override from input
-          if (process.env.BASE_URL) setVar("url", process.env.BASE_URL);
-          if (!env.values.find(v => v.key === "url" && v.value)) setVar("url", "https://reqres.in");
-
-          // Extra variables: key=value;key2=value2
-          (process.env.EXTRA_VARS || "").split(";").map(s => s.trim()).filter(Boolean).forEach(pair => {
-            const i = pair.indexOf("=");
-            if (i > 0) setVar(pair.slice(0, i).trim(), pair.slice(i + 1).trim());
-          });
+          // url and all other variables come from the environment file as they are
+          if (!env.values.find(v => v.key === "url" && v.value && v.enabled !== false)) {
+            console.log("::warning::No 'url' value found in environment file");
+          }
 
           fs.writeFileSync("run-environment.json", JSON.stringify(env, null, 2));
 
