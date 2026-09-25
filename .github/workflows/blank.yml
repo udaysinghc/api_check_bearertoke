@@ -20,7 +20,6 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-
       # ==================================================
       # Setup Node.js
       # ==================================================
@@ -28,7 +27,6 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 20
-
 
       # ==================================================
       # Install Newman
@@ -50,7 +48,6 @@ jobs:
           echo "jq version:"
           jq --version
 
-
       # ==================================================
       # Create reports directory
       # ==================================================
@@ -58,7 +55,6 @@ jobs:
         shell: bash
         run: |
           mkdir -p reports
-
 
       # ==================================================
       # Find Postman collection and environment
@@ -78,7 +74,6 @@ jobs:
           echo "Folder:"
           echo "$API_AUTOMATION"
 
-
           # ----------------------------------------------
           # Check API Automation folder
           # ----------------------------------------------
@@ -87,7 +82,6 @@ jobs:
             echo "❌ API Automation folder not found"
             exit 1
           fi
-
 
           # ----------------------------------------------
           # Find collection
@@ -98,16 +92,13 @@ jobs:
             -name "*.postman_collection.json" \
             | head -n 1)
 
-
           if [ -z "$COLLECTION" ]; then
             echo "❌ Postman collection not found"
             exit 1
           fi
 
-
           echo "✅ Collection found:"
           echo "$COLLECTION"
-
 
           # ----------------------------------------------
           # Find environment
@@ -117,7 +108,6 @@ jobs:
             -type f \
             -name "*.postman_environment.json" \
             | head -n 1)
-
 
           if [ -n "$ENVIRONMENT" ]; then
 
@@ -130,14 +120,12 @@ jobs:
 
           fi
 
-
           # ----------------------------------------------
           # Save variables
           # ----------------------------------------------
 
           echo "COLLECTION=$COLLECTION" >> "$GITHUB_ENV"
           echo "ENVIRONMENT=$ENVIRONMENT" >> "$GITHUB_ENV"
-
 
       # ==================================================
       # Run Newman
@@ -148,25 +136,14 @@ jobs:
         shell: bash
 
         env:
-          # GitHub Actions manual input
-          #
-          # IMPORTANT:
-          # Enter ONLY the token.
-          #
-          # Correct:
-          # eyJhbGciOiJIUzI1NiIs...
-          #
-          # Incorrect:
-          # Bearer eyJhbGciOiJIUzI1NiIs...
-          #
-          ACCESS_TOKEN: ${{ github.event.inputs.BearerToken }}
+          # GitHub workflow_dispatch input
+          ACCESS_TOKEN: ${{ inputs.bearerToken }}
 
         run: |
 
           echo "=========================================="
           echo "Running Newman"
           echo "=========================================="
-
 
           # ----------------------------------------------
           # Check token
@@ -182,25 +159,23 @@ jobs:
 
           fi
 
+          # ----------------------------------------------
+          # Mask token
+          # ----------------------------------------------
+
+          echo "::add-mask::$ACCESS_TOKEN"
 
           echo "✅ Bearer token received."
           echo "Token value will not be printed."
 
-
           # ----------------------------------------------
           # Remove accidental "Bearer " prefix
-          #
-          # This makes the workflow safer if someone enters:
-          #
-          # Bearer eyJhbGciOi...
-          #
-          # instead of only:
-          #
-          # eyJhbGciOi...
           # ----------------------------------------------
 
           ACCESS_TOKEN="${ACCESS_TOKEN#Bearer }"
 
+          # Mask again after transformation
+          echo "::add-mask::$ACCESS_TOKEN"
 
           # ----------------------------------------------
           # Check collection
@@ -217,9 +192,8 @@ jobs:
 
           fi
 
-
           # ----------------------------------------------
-          # Run Newman with environment
+          # Run Newman
           # ----------------------------------------------
 
           if [ -n "$ENVIRONMENT" ] && [ -f "$ENVIRONMENT" ]; then
@@ -238,10 +212,10 @@ jobs:
 
           else
 
-            echo "No Postman environment found."
+            echo "⚠️ No Postman environment found."
 
             newman run "$COLLECTION" \
-              --env-var "accessToken=$ACCESS_TOKEN" \
+              --env-var "BearerToken=$ACCESS_TOKEN" \
               --reporters cli,json,htmlextra \
               --reporter-json-export reports/report.json \
               --reporter-htmlextra-export reports/report.html
@@ -249,7 +223,6 @@ jobs:
             NEWMAN_EXIT_CODE=$?
 
           fi
-
 
           # ----------------------------------------------
           # Save Newman result
@@ -260,11 +233,9 @@ jobs:
 
           echo "NEWMAN_EXIT_CODE=$NEWMAN_EXIT_CODE" >> "$GITHUB_ENV"
 
-
           # Do not fail this step.
           # Final step handles workflow failure.
           exit 0
-
 
       # ==================================================
       # Generate GitHub Actions summary
@@ -276,7 +247,6 @@ jobs:
 
           echo "# API Automation Result" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-
 
           # ----------------------------------------------
           # Check report
@@ -296,7 +266,6 @@ jobs:
 
           fi
 
-
           # ----------------------------------------------
           # Read Newman statistics
           # ----------------------------------------------
@@ -309,7 +278,6 @@ jobs:
             '.run.stats.requests.failed // 0' \
             reports/report.json)
 
-
           ASSERTIONS=$(jq -r \
             '.run.stats.assertions.total // 0' \
             reports/report.json)
@@ -317,7 +285,6 @@ jobs:
           FAILED_ASSERTIONS=$(jq -r \
             '.run.stats.assertions.failed // 0' \
             reports/report.json)
-
 
           TESTS=$(jq -r \
             '.run.stats.tests.total // 0' \
@@ -327,7 +294,6 @@ jobs:
             '.run.stats.tests.failed // 0' \
             reports/report.json)
 
-
           PREREQUEST=$(jq -r \
             '.run.stats.prerequests.total // 0' \
             reports/report.json)
@@ -336,21 +302,17 @@ jobs:
             '.run.stats.prerequests.failed // 0' \
             reports/report.json)
 
-
           ITERATIONS=$(jq -r \
             '.run.stats.iterations.total // 0' \
             reports/report.json)
-
 
           AVG_TIME=$(jq -r \
             '.run.timings.responseAverage // 0' \
             reports/report.json)
 
-
           COLLECTION_NAME=$(jq -r \
             '.collection.info.name // "Unknown Collection"' \
             reports/report.json)
-
 
           # ----------------------------------------------
           # Create summary
@@ -418,7 +380,6 @@ jobs:
 
           } >> "$GITHUB_STEP_SUMMARY"
 
-
       # ==================================================
       # Upload reports
       # ==================================================
@@ -429,7 +390,6 @@ jobs:
           name: postman-report
           path: reports/
           if-no-files-found: warn
-
 
       # ==================================================
       # Check Newman result
@@ -446,7 +406,6 @@ jobs:
           echo "Newman Exit Code:"
           echo "${NEWMAN_EXIT_CODE:-unknown}"
 
-
           if [ "${NEWMAN_EXIT_CODE:-1}" != "0" ]; then
 
             echo ""
@@ -455,7 +414,6 @@ jobs:
             exit 1
 
           fi
-
 
           echo ""
           echo "✅ Newman API tests passed."
