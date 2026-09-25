@@ -1,4 +1,4 @@
-name: final test this version
+name: final test check api 
 
 on:
   workflow_dispatch:
@@ -70,22 +70,33 @@ jobs:
           if TOKEN_VALUE="$TOKEN_VALUE" node <<'NODE'
           const t = process.env.TOKEN_VALUE;
           const parts = t.split(".");
+          const fs = require("fs");
+          const addSummary = (text) => { if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, text + "\n"); };
+          // Wrong token = warning only, tests still run so the API response is visible
+          const warn = (msg) => {
+            console.log("::warning::" + msg + " Tests will still run.");
+            addSummary("## Token Check\n\n⚠️ **" + msg + "**\n\nTests still ran with this token - see the API response below.\n");
+          };
+          const fp = require("crypto").createHash("sha256").update(t).digest("hex").slice(0, 12);
+          console.log("Token entered:   " + t.slice(0, 12) + "......" + t.slice(-6));
+          console.log("Fingerprint:     " + fp + "  (must match 'Token sent' in API Responses)");
           console.log("Token length: " + t.length + " characters");
           console.log("Token parts (must be 3): " + parts.length);
 
           if (parts.length !== 3) {
-            console.log("::error::Token is not a valid JWT. It has " + parts.length + " parts, must be 3 (xxx.yyy.zzz).");
-            if (parts.length > 3) console.log("Looks like the token was pasted twice or joined with another token.");
-            if (parts.length < 3) console.log("Looks like the token was cut off (incomplete copy).");
-            process.exit(1);
+            let why = "Token is not a valid JWT. It has " + parts.length + " part(s), must be 3 (xxx.yyy.zzz).";
+            if (parts.length > 3) why += " Looks like it was pasted twice or joined with another token.";
+            if (parts.length < 3) why += " Looks like it is cut off, or it is not a JWT.";
+            warn(why);
+            process.exit(0);
           }
 
           const decode = (s) => JSON.parse(Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
           let header, payload;
           try { header = decode(parts[0]); payload = decode(parts[1]); }
           catch (e) {
-            console.log("::error::Token parts cannot be decoded - the token is damaged or incomplete. Copy it again.");
-            process.exit(1);
+            warn("Token parts cannot be decoded - the token is damaged or incomplete.");
+            process.exit(0);
           }
 
           console.log("Algorithm: " + header.alg);
@@ -101,7 +112,7 @@ jobs:
           }
           console.log("✅ Token format is a valid JWT");
           NODE
-          then :; else echo "❌ Fix the token and run again"; exit 1; fi
+          then :; else echo "⚠️ Token check had a problem - continuing anyway"; fi
 
           echo "TOKEN_VALUE=$TOKEN_VALUE" >> "$GITHUB_ENV"
           echo "✅ Token is ready"
@@ -260,12 +271,28 @@ jobs:
                  ex.request.url.port ? ":" + ex.request.url.port : "",
                  "/" + (ex.request.url.path || []).join("/")].join("")
               : "";
-            const sentAuth = ((ex.request && ex.request.header) || [])
-              .some(h => String(h.key).toLowerCase() === "authorization");
+            const authH = ((ex.request && ex.request.header) || [])
+              .find(h => String(h.key).toLowerCase() === "authorization" && !h.disabled);
+            const sentAuth = !!authH;
+            let tokenInfo = "no token sent";
+            if (authH) {
+              const v = String(authH.value).trim();
+              const scheme = v.split(/\s+/)[0];
+              const tok = v.slice(scheme.length).trim();
+              const fp = require("crypto").createHash("sha256").update(tok).digest("hex").slice(0, 12);
+              tokenInfo = tok.startsWith("{{")
+                ? "NOT FILLED - variable " + tok + " was sent as text"
+                : "[" + scheme + "] " + tok.slice(0, 12) + "......" + tok.slice(-6) +
+                  " (length " + tok.length + ", fingerprint " + fp + ")";
+            }
             console.log("**" + name + "**\n");
             console.log("- **URL:** " + url);
             console.log("- **Status:** " + (res.code || "no response") + " " + (res.status || ""));
             console.log("- **Authorization sent:** " + (sentAuth ? "yes" : "no"));
+            console.log("- **Token sent:** " + tokenInfo);
+            const inputFp = process.env.TOKEN_VALUE
+              ? require("crypto").createHash("sha256").update(process.env.TOKEN_VALUE).digest("hex").slice(0, 12) : "";
+            if (sentAuth && inputFp) console.log("- **Same as token entered:** " + (tokenInfo.includes(inputFp) ? "✅ yes" : "❌ NO"));
             console.log("\n```\n" + (body || "(empty body)") + "\n```\n");
           }
           NODE
